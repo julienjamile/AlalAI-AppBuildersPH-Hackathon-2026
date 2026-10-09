@@ -1,10 +1,12 @@
-
+import { useState, useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import ActionButton from '../components/ActionButton';
 import Panel from '../components/Panel';
 import ProgressSteps from '../components/ProgressSteps';
 import { COLORS } from '../constants/colors';
+import { ApiService } from '../services/api';
+import type { SupplyNeedItem } from '../types';
 
 type Props = {
   familyName: string;
@@ -20,12 +22,6 @@ type Props = {
   onBack: () => void;
 };
 
-const SUPPLIES = [
-  { name: 'Rice', amount: '2.5 kg', description: 'Estimated household allocation' },
-  { name: 'Drinking water', amount: '10 L', description: 'Estimated household allocation' },
-  { name: 'Family hygiene kit', amount: '1 kit', description: 'Standard sample allocation' },
-];
-
 export default function NeedsScreen({
   familyName,
   members,
@@ -40,23 +36,42 @@ export default function NeedsScreen({
   onBack,
 }: Props) {
   const householdSize = Math.max(1, Number(members) || 1);
+  const [supplies, setSupplies] = useState<SupplyNeedItem[]>([]);
+
+  useEffect(() => {
+    async function fetchCalculatedNeeds() {
+      try {
+        const result = await ApiService.calculateNeeds(
+          householdSize,
+          hasInfant,
+          hasSenior,
+          hasMedicalNeeds
+        );
+        setSupplies(result);
+      } catch {
+        // Handled in ApiService fallback
+      }
+    }
+
+    fetchCalculatedNeeds();
+  }, [householdSize, hasInfant, hasSenior, hasMedicalNeeds]);
 
   const needs = [
     {
-      title: 'Infant in household',
-      description: 'The household needs infant supplies.',
+      title: 'Infant in household (under 2 yrs)',
+      description: 'Auto-allocates diapers, formula, and infant feeding pack.',
       value: hasInfant,
       onChange: setHasInfant,
     },
     {
-      title: 'Senior in household',
-      description: 'The household includes an older adult.',
+      title: 'Senior in household (60+ yrs)',
+      description: 'Auto-allocates adult care pack and senior nutrition.',
       value: hasSenior,
       onChange: setHasSenior,
     },
     {
-      title: 'Medical needs',
-      description: 'The household needs medical support.',
+      title: 'Medical needs / Chronic illness',
+      description: 'Auto-allocates insulin cold-chain cooler pack and maintenance meds.',
       value: hasMedicalNeeds,
       onChange: setHasMedicalNeeds,
     },
@@ -67,21 +82,21 @@ export default function NeedsScreen({
       <ProgressSteps currentStep="needs" />
 
       <View style={styles.notice}>
-        <Text style={styles.panelTitle}>Confirm family needs</Text>
+        <Text style={styles.panelTitle}>Bilang: Supply Needs Counter</Text>
         <Text style={styles.body}>
-          Review the household details and select any additional support
-          requirements before completing the registration.
+          Tala automatically turns household demographics into precise relief allocations,
+          ensuring vulnerable family members are not overlooked.
         </Text>
       </View>
 
       <Panel>
         <Text style={styles.eyebrow}>CURRENT REGISTRATION</Text>
-        <Text style={styles.familyName}>{familyName || 'Family Name'}</Text>
-        <Text style={styles.body}>Location: {location}</Text>
+        <Text style={styles.familyName}>{familyName || 'Household Representative'}</Text>
+        <Text style={styles.body}>Location: {location || 'Not specified'}</Text>
         <Text style={styles.body}>Household members: {householdSize}</Text>
       </Panel>
 
-      <Text style={styles.sectionTitle}>Additional support</Text>
+      <Text style={styles.sectionTitle}>Vulnerability Flags</Text>
 
       {needs.map((need) => (
         <Pressable
@@ -107,27 +122,34 @@ export default function NeedsScreen({
         </Pressable>
       ))}
 
-      <Text style={styles.sectionTitle}>Estimated supplies</Text>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Calculated Relief Allocation</Text>
+        <Text style={styles.itemCountTag}>
+          {supplies.length} items calculated
+        </Text>
+      </View>
 
       <Panel>
-        {SUPPLIES.map((supply) => (
+        {supplies.map((supply) => (
           <View key={supply.name} style={styles.supplyRow}>
             <View style={styles.supplyDescription}>
               <Text style={styles.needTitle}>{supply.name}</Text>
               <Text style={styles.body}>{supply.description}</Text>
             </View>
-            <Text style={styles.supplyValue}>{supply.amount}</Text>
+            <View style={styles.supplyBadge}>
+              <Text style={styles.supplyValue}>{supply.amount}</Text>
+            </View>
           </View>
         ))}
 
         <Text style={styles.helper}>
-          These are sample estimates for the prototype, not actual distribution
-          quantities.
+          Calculated by Bilang Python rules: 0.5kg rice/person/day + 2L water/person/day
+          + special infant, senior, and insulin cold-chain needs.
         </Text>
       </Panel>
 
       <ActionButton
-        title="Complete review and preview card  →"
+        title="Complete review and generate Kard Silong  →"
         onPress={onContinue}
       />
 
@@ -171,11 +193,25 @@ const styles = StyleSheet.create({
     fontSize: 19,
     fontWeight: '800',
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
   sectionTitle: {
     fontSize: 19,
     fontWeight: '800',
     color: COLORS.dark,
-    marginTop: 8,
+  },
+  itemCountTag: {
+    backgroundColor: COLORS.paleGreen,
+    color: COLORS.primary,
+    fontSize: 11,
+    fontWeight: '800',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
   needRow: {
     minHeight: 82,
@@ -220,21 +256,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    paddingVertical: 5,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.track,
   },
   supplyDescription: {
     flex: 1,
-    gap: 3,
+    gap: 2,
+  },
+  supplyBadge: {
+    backgroundColor: COLORS.paleGreen,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
   },
   supplyValue: {
     color: COLORS.dark,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     textAlign: 'right',
   },
   helper: {
     color: COLORS.muted,
     fontSize: 12,
-    lineHeight: 19,
+    lineHeight: 18,
+    marginTop: 8,
   },
 });

@@ -41,3 +41,11 @@ example
 # generated native folders
 /ios
 /android
+
+# Python & SQLite
+__pycache__/
+*.py[cod]
+*$py.class
+*.db
+backend/silong.db
+

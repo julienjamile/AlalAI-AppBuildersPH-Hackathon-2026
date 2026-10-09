@@ -1,4 +1,3 @@
-
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import {
@@ -16,20 +15,24 @@ import DashboardScreen from '../screen/DashboardScreen';
 import NeedsScreen from '../screen/NeedsScreen';
 import RegistrationScreen from '../screen/RegistrationScreen';
 import ReportsScreen from '../screen/ReportsScreen';
-import type { Screen } from '../types';
+import { ApiService } from '../services/api';
+import type { HouseholdData, RegistrationStep, Screen } from '../types';
 
 export default function HomeScreen() {
   const [screen, setScreen] = useState<Screen>('dashboard');
 
   const [intakeType, setIntakeType] = useState('Kwento');
-  const [familyName, setFamilyName] = useState('Rosa Santos');
-  const [birthdate, setBirthdate] = useState('1985-04-12');
-  const [members, setMembers] = useState('5');
-  const [location, setLocation] = useState('Evacuation Center A');
+  const [familyName, setFamilyName] = useState('');
+  const [birthdate, setBirthdate] = useState('');
+  const [members, setMembers] = useState('1');
+  const [location, setLocation] = useState('');
 
-  const [hasInfant, setHasInfant] = useState(true);
+  const [hasInfant, setHasInfant] = useState(false);
   const [hasSenior, setHasSenior] = useState(false);
   const [hasMedicalNeeds, setHasMedicalNeeds] = useState(false);
+  const [medicalNotes, setMedicalNotes] = useState('');
+
+  const [registeredCard, setRegisteredCard] = useState<HouseholdData | null>(null);
 
   function startRegistration(type: string) {
     setIntakeType(type);
@@ -40,30 +43,49 @@ export default function HomeScreen() {
     setFamilyName('');
     setBirthdate('');
     setMembers('1');
-    setLocation('Evacuation Center A');
+    setLocation('');
 
     setHasInfant(false);
     setHasSenior(false);
     setHasMedicalNeeds(false);
+    setMedicalNotes('');
+    setRegisteredCard(null);
 
     setScreen('intake');
   }
 
-  function completeStep(
-    _step: 'confirm' | 'duplicate' | 'card',
+  async function completeStep(
+    step: RegistrationStep,
     next: Screen
   ) {
+    if (step === 'needs' && next === 'card') {
+      try {
+        const saved = await ApiService.createHousehold({
+          representative_name: familyName.trim(),
+          birthdate: birthdate.trim(),
+          members_count: Math.max(1, Number(members) || 1),
+          location: location.trim(),
+          has_infant: hasInfant,
+          has_senior: hasSenior,
+          has_medical_needs: hasMedicalNeeds,
+          medical_notes: medicalNotes,
+        });
+        setRegisteredCard(saved);
+      } catch (e) {
+        console.warn('Error saving household:', e);
+      }
+    }
     setScreen(next);
   }
 
   const pageTitles: Record<Screen, string> = {
-    dashboard: 'Camp overview',
-    intake: 'Register a family',
-    confirm: 'Confirm details',
-    duplicate: 'Check duplicates',
-    needs: 'Family needs',
-    card: 'Kard Silong',
-    reports: 'Reports and sync',
+    dashboard: 'Camp Overview',
+    intake: 'Register a Family',
+    confirm: 'Confirm Details',
+    duplicate: 'Check Duplicates (Kilala)',
+    needs: 'Family Needs (Bilang)',
+    card: 'Kard Silong QR',
+    reports: 'Reports & Sync (Text Ulat)',
   };
 
   function goBack() {
@@ -115,6 +137,16 @@ export default function HomeScreen() {
             setMembers={setMembers}
             location={location}
             setLocation={setLocation}
+            hasInfant={hasInfant}
+            setHasInfant={setHasInfant}
+            hasSenior={hasSenior}
+            setHasSenior={setHasSenior}
+            hasMedicalNeeds={hasMedicalNeeds}
+            setHasMedicalNeeds={setHasMedicalNeeds}
+            medicalNotes={medicalNotes}
+            setMedicalNotes={setMedicalNotes}
+            registeredCard={registeredCard}
+            setRegisteredCard={setRegisteredCard}
             onNavigate={setScreen}
             onCompleteStep={completeStep}
             onStartRegistration={startRegistration}
@@ -133,7 +165,7 @@ export default function HomeScreen() {
             setHasSenior={setHasSenior}
             hasMedicalNeeds={hasMedicalNeeds}
             setHasMedicalNeeds={setHasMedicalNeeds}
-            onContinue={() => completeStep('card', 'card')}
+            onContinue={() => completeStep('needs', 'card')}
             onBack={() => setScreen('duplicate')}
           />
         )}
