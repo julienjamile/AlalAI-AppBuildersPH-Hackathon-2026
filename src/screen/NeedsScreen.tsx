@@ -84,7 +84,7 @@ export default function NeedsScreen({
       <View style={styles.notice}>
         <Text style={styles.panelTitle}>Bilang: Supply Needs Counter</Text>
         <Text style={styles.body}>
-          Tala automatically turns household demographics into precise relief allocations,
+          Taga-alalAI automatically turns household demographics into precise relief allocations,
           ensuring vulnerable family members are not overlooked.
         </Text>
       </View>
@@ -149,7 +149,7 @@ export default function NeedsScreen({
       </Panel>
 
       <ActionButton
-        title="Complete review and generate Kard Silong  →"
+        title="Complete review and generate Kard AlalAI  →"
         onPress={onContinue}
       />
 

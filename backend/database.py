@@ -3,7 +3,7 @@ from pathlib import Path
 from sqlmodel import SQLModel, create_engine, Session
 
 DB_DIR = Path(__file__).resolve().parent
-DB_PATH = DB_DIR / "silong.db"
+DB_PATH = DB_DIR / "alalai.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 # Connect args needed for SQLite in multithreaded FastAPI

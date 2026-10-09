@@ -77,7 +77,7 @@ class ExtractedHousehold(SQLModel):
     has_senior: bool = False
     has_medical_needs: bool = False
     medical_notes: Optional[str] = None
-    confidence_scores: dict[str, float] = {}
+    confidence_scores: dict[str, float] = Field(default_factory=dict)
     raw_transcript: Optional[str] = None
 
 class DuplicateCheckRequest(SQLModel):
@@ -111,7 +111,7 @@ class CalculatedSupply(SQLModel):
 class HouseholdCreateRequest(SQLModel):
     representative_name: str
     birthdate: str
-    members_count: int
+    members_count: int = Field(ge=1, le=100)
     location: str
     has_infant: bool = False
     has_senior: bool = False

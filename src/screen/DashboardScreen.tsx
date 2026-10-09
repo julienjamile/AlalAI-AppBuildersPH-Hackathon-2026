@@ -20,11 +20,11 @@ type Props = {
 
 export default function DashboardScreen({ onNavigate }: Props) {
   const [stats, setStats] = useState<DashboardStatsData>({
-    total_families: 128,
-    total_individuals: 459,
-    pending_reviews: 12,
-    low_stock_items: 3,
-    active_evacuation_centers: 4,
+    total_families: 0,
+    total_individuals: 0,
+    pending_reviews: 0,
+    low_stock_items: 0,
+    active_evacuation_centers: 0,
     recent_registrations: [],
   });
   const [loading, setLoading] = useState(false);
@@ -68,7 +68,7 @@ export default function DashboardScreen({ onNavigate }: Props) {
     <View style={styles.screen}>
       <View style={styles.hero}>
         <View style={styles.heroTop}>
-          <Text style={styles.eyebrow}>CAMP STATUS · TALA HUB</Text>
+          <Text style={styles.eyebrow}>CAMP STATUS · TAGA-ALALAI HUB</Text>
           <Pressable
             accessibilityRole="button"
             onPress={loadStats}
@@ -83,7 +83,7 @@ export default function DashboardScreen({ onNavigate }: Props) {
         <Text style={styles.heroTitle}>Relief Center Overview</Text>
         <Text style={styles.heroDescription}>
           Real-time household counts, predictive supply alerts, and zero-internet
-          synchronization powered by Tala Local AI.
+          synchronization powered by Taga-alalAI Local AI.
         </Text>
 
         <ActionButton
@@ -121,17 +121,17 @@ export default function DashboardScreen({ onNavigate }: Props) {
       {/* Relief Line QR Scanner Action */}
       <Panel>
         <View style={styles.reliefHeader}>
-          <Text style={styles.panelTitle}>Kard Silong Relief Line</Text>
+          <Text style={styles.panelTitle}>Kard AlalAI Relief Line</Text>
           <View style={styles.tagLive}>
             <Text style={styles.tagLiveText}>ANTI-FRAUD</Text>
           </View>
         </View>
         <Text style={styles.body}>
-          Scan a family&apos;s Kard Silong QR code at the relief distribution line.
+          Scan a family&apos;s Kard AlalAI QR code at the relief distribution line.
           Instantly catches double-claims and updates inventory.
         </Text>
         <ActionButton
-          title="Scan Kard Silong at relief line"
+          title="Scan Kard AlalAI at relief line"
           secondary
           onPress={() => {
             setScanResult(null);
@@ -146,7 +146,7 @@ export default function DashboardScreen({ onNavigate }: Props) {
         <Text style={styles.panelTitle}>Family registration (Kwento &amp; Kuha)</Text>
         <Text style={styles.body}>
           Record household via speech or photo, review Kilala duplicate warnings,
-          and issue Kard Silong QR card.
+          and issue Kard AlalAI QR card.
         </Text>
         <ActionButton
           title="Open registration"
@@ -170,7 +170,7 @@ export default function DashboardScreen({ onNavigate }: Props) {
       <Panel>
         <Text style={styles.panelTitle}>Abiso &amp; Text Ulat (Reports)</Text>
         <Text style={styles.body}>
-          Stock runout predictions, Tala resupply request approvals, and
+          Stock runout predictions, Taga-alalAI resupply request approvals, and
           160-character SMS packing for MDRRMO.
         </Text>
         <ActionButton
@@ -189,9 +189,9 @@ export default function DashboardScreen({ onNavigate }: Props) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Kard Silong QR Scanner</Text>
+            <Text style={styles.modalTitle}>Kard AlalAI QR Scanner</Text>
             <Text style={styles.modalBody}>
-              Enter or scan a family&apos;s Kard Silong QR identifier to verify
+              Enter or scan a family&apos;s Kard AlalAI QR identifier to verify
               eligibility and prevent double distribution:
             </Text>
 
@@ -199,7 +199,7 @@ export default function DashboardScreen({ onNavigate }: Props) {
               style={styles.qrInput}
               value={scanQrInput}
               onChangeText={setScanQrInput}
-              placeholder="e.g. SILONG-JUANDELACRUZ-001"
+              placeholder="e.g. ALALAI-JUANDELACRUZ-001"
               autoCapitalize="characters"
               autoCorrect={false}
             />

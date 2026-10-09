@@ -1,8 +1,14 @@
 import os
 import random
 import socket
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+import logging
+import tempfile
+from datetime import date, datetime, timezone, timedelta
+from functools import lru_cache
+from pathlib import Path
+from threading import Lock
+from typing import Any, List, Optional
+from io import BytesIO
 from fastapi import FastAPI, Depends, HTTPException, Query, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select, func
@@ -24,6 +30,74 @@ from backend.tala import (
 from backend.reports import generate_evacuation_pdf
 from backend.seed import seed_database
 
+logger = logging.getLogger("alalai.intake")
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
+_WHISPER_LOCK = Lock()
+
+
+@lru_cache(maxsize=1)
+def _get_whisper_model(model_name: str) -> Any:
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Speech recognition is not installed on the AlalAI hub. Install backend requirements first.",
+        ) from exc
+
+    try:
+        return WhisperModel(model_name, device="cpu", compute_type="int8")
+    except Exception as exc:
+        logger.exception("Unable to load the local Whisper model %s", model_name)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Taga-alalAI could not load Whisper model '{model_name}'. Connect the hub to download it once, then retry.",
+        ) from exc
+
+
+@lru_cache(maxsize=1)
+def _get_ocr_engine() -> Any:
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="ID text recognition is not installed on the AlalAI hub. Install backend requirements first.",
+        ) from exc
+
+    return RapidOCR()
+
+
+def _read_upload(file: UploadFile, max_bytes: int, allowed_types: set[str], allowed_suffixes: set[str]) -> tuple[bytes, str]:
+    suffix = Path(file.filename or "").suffix.lower()
+    content_type = (file.content_type or "").lower().split(";", 1)[0].strip()
+    if content_type not in allowed_types and suffix not in allowed_suffixes:
+        raise HTTPException(status_code=415, detail="Unsupported file type.")
+
+    content = file.file.read(max_bytes + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"Files must be no larger than {max_bytes // (1024 * 1024)} MB.")
+    return content, suffix
+
+
+def _parse_photo_text(ocr_text: str, ocr_confidence: Optional[float] = None) -> ExtractedHousehold:
+    result = tala_parse_photo_text(ocr_text)
+    name = result["representative_name"].strip()
+    if len(name) < 3 or not any(character.isalpha() for character in name):
+        raise HTTPException(
+            status_code=422,
+            detail="Taga-alalAI could not read a person's name. Retake a clear, well-lit photo of the ID or enter the details manually.",
+        )
+
+    if ocr_confidence is not None:
+        result["confidence_scores"]["ocr_text"] = round(ocr_confidence, 3)
+    return ExtractedHousehold(**result)
+
+
 def get_local_ip() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -35,8 +109,8 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 app = FastAPI(
-    title="Silong Hub Laptop Backend (AlalAI)",
-    description="Offline-first Disaster Evacuation Intake & Coordination API powered by Tala Local AI",
+    title="AlalAI Hub Laptop Backend",
+    description="Offline-first Disaster Evacuation Intake & Coordination API powered by Taga-alalAI Local AI",
     version="1.0.0"
 )
 
@@ -62,8 +136,9 @@ def health_check(session: Session = Depends(get_session)):
     local_ip = get_local_ip()
     return {
         "status": "online",
-        "app": "Silong (AlalAI)",
-        "tala_ai": "Tala Local AI Hub Active",
+        "app": "AlalAI",
+        "taga_alalai": "Taga-alalAI Local AI Hub Active",
+        "tala_ai": "Taga-alalAI Local AI Hub Active",
         "database": "SQLite connected",
         "registered_households": count,
         "local_ip": local_ip,
@@ -87,25 +162,35 @@ def intake_voice(req: IntakeVoiceRequest):
 
 # Audio file upload endpoint for faster-whisper / audio processing
 @app.post("/api/intake/voice/upload", response_model=ExtractedHousehold)
-async def intake_voice_upload(file: UploadFile = File(...)):
-    audio_bytes = await file.read()
-    transcript = ""
+def intake_voice_upload(file: UploadFile = File(...)):
+    audio_bytes, suffix = _read_upload(
+        file,
+        MAX_AUDIO_BYTES,
+        {"audio/mp4", "audio/m4a", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/webm", "audio/ogg", "audio/aac", "application/octet-stream"},
+        {".m4a", ".mp4", ".mp3", ".wav", ".webm", ".ogg", ".aac", ".3gp"},
+    )
+    model = _get_whisper_model(os.getenv("ALALAI_WHISPER_MODEL", "base"))
+    temporary_path: Optional[str] = None
     try:
-        import whisper
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-        model = whisper.load_model("tiny")
-        res = model.transcribe(tmp_path)
-        if res.get("text"):
-            transcript = res["text"].strip()
-        os.remove(tmp_path)
-    except Exception:
-        pass
+        with tempfile.NamedTemporaryFile(suffix=suffix or ".m4a", delete=False) as temporary:
+            temporary.write(audio_bytes)
+            temporary_path = temporary.name
+
+        with _WHISPER_LOCK:
+            segments, _ = model.transcribe(temporary_path, beam_size=5, vad_filter=True)
+            transcript = " ".join(segment.text.strip() for segment in segments).strip()
+    except Exception as exc:
+        logger.exception("Local Whisper transcription failed")
+        raise HTTPException(
+            status_code=422,
+            detail="Taga-alalAI could not transcribe this recording. Try recording again in a quiet place or enter the details manually.",
+        ) from exc
+    finally:
+        if temporary_path:
+            Path(temporary_path).unlink(missing_ok=True)
 
     if not transcript:
-        raise HTTPException(status_code=400, detail="Could not transcribe audio. Please provide text input.")
+        raise HTTPException(status_code=422, detail="No speech was recognized. Try recording again or enter the details manually.")
 
     result = tala_parse_voice(transcript)
     return ExtractedHousehold(**result)
@@ -121,8 +206,60 @@ def intake_photo(req: IntakePhotoRequest):
     if not ocr_text:
         raise HTTPException(status_code=400, detail="Extracted text or document content is required")
 
-    result = tala_parse_photo_text(ocr_text)
-    return ExtractedHousehold(**result)
+    return _parse_photo_text(ocr_text)
+
+
+@app.post("/api/intake/photo/upload", response_model=ExtractedHousehold)
+def intake_photo_upload(file: UploadFile = File(...)):
+    image_bytes, _ = _read_upload(
+        file,
+        MAX_IMAGE_BYTES,
+        {"image/jpeg", "image/png", "image/webp", "application/octet-stream"},
+        {".jpg", ".jpeg", ".png", ".webp"},
+    )
+
+    try:
+        import numpy as np
+        from PIL import Image, UnidentifiedImageError
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Image processing is not installed on the AlalAI hub. Install backend requirements first.",
+        ) from exc
+
+    try:
+        with Image.open(BytesIO(image_bytes)) as source:
+            if source.format not in {"JPEG", "PNG", "WEBP"}:
+                raise HTTPException(status_code=415, detail="Upload a JPEG, PNG, or WebP ID image.")
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise HTTPException(status_code=413, detail="The image resolution is too large. Choose a smaller ID photo.")
+            image = np.asarray(source.convert("RGB"))
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="The uploaded file is not a readable image.") from exc
+
+    engine = _get_ocr_engine()
+    try:
+        result, _ = engine(image)
+    except Exception as exc:
+        logger.exception("Local ID OCR failed")
+        raise HTTPException(
+            status_code=422,
+            detail="Taga-alalAI could not read this image. Retake a clear, well-lit photo with the whole ID in frame.",
+        ) from exc
+
+    recognized_lines = [
+        (entry[1].strip(), float(entry[2]))
+        for entry in (result or [])
+        if len(entry) >= 3 and entry[1].strip()
+    ]
+    ocr_text = "\n".join(text for text, _ in recognized_lines)
+    if not ocr_text:
+        raise HTTPException(status_code=422, detail="No readable text was found. Retake the ID photo or enter the details manually.")
+
+    average_confidence = sum(score for _, score in recognized_lines) / len(recognized_lines)
+    return _parse_photo_text(ocr_text, average_confidence)
 
 # --- 3. KILALA (Duplicate Detection) ---
 @app.post("/api/duplicates/check", response_model=List[DuplicateMatch])
@@ -180,19 +317,36 @@ def create_household(
     req: HouseholdCreateRequest,
     session: Session = Depends(get_session)
 ):
-    # Generate unique ID and Kard Silong QR Code
+    representative_name = req.representative_name.strip()
+    location = req.location.strip()
+    birthdate = req.birthdate.strip()
+    if len(representative_name) < 2:
+        raise HTTPException(status_code=422, detail="A household representative name is required.")
+    if len(location) < 2:
+        raise HTTPException(status_code=422, detail="An evacuation center or location is required.")
+    if birthdate:
+        try:
+            parsed_birthdate = date.fromisoformat(birthdate)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Birthdate must use YYYY-MM-DD format.") from exc
+        if parsed_birthdate.isoformat() != birthdate:
+            raise HTTPException(status_code=422, detail="Birthdate must use YYYY-MM-DD format.")
+        if parsed_birthdate > date.today():
+            raise HTTPException(status_code=422, detail="Birthdate cannot be in the future.")
+
+    # Generate unique ID and Kard AlalAI QR Code
     count = session.exec(select(func.count(Household.id))).one()
     fam_id = f"FAM-{count + 1:04d}"
-    qr_code = f"SILONG-{fam_id}-{random.randint(1000, 9999)}"
+    qr_code = f"ALALAI-{fam_id}-{random.randint(1000, 9999)}"
 
     now = datetime.now(timezone.utc)
     household = Household(
         id=fam_id,
         qr_code=qr_code,
-        representative_name=req.representative_name.strip(),
-        birthdate=req.birthdate.strip(),
+        representative_name=representative_name,
+        birthdate=birthdate,
         members_count=req.members_count,
-        location=req.location.strip(),
+        location=location,
         has_infant=req.has_infant,
         has_senior=req.has_senior,
         has_medical_needs=req.has_medical_needs,
@@ -329,17 +483,17 @@ def download_pdf_report(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=Silong_Evacuation_Report.pdf"}
+        headers={"Content-Disposition": "attachment; filename=AlalAI_Evacuation_Report.pdf"}
     )
 
-# --- 10. KARD SILONG (QR Code Relief Line Scan) ---
+# --- 10. KARD ALALAI (QR Code Relief Line Scan) ---
 @app.post("/api/relief/scan", response_model=ReliefScanResponse)
 def scan_relief_card(
     req: ReliefScanRequest,
     session: Session = Depends(get_session)
 ):
     """
-    Kard Silong QR Code Distribution Line:
+    Kard AlalAI QR Code Distribution Line:
     Scans family QR code. Enforces double-claim prevention!
     """
     # Find household by QR or ID
@@ -350,7 +504,7 @@ def scan_relief_card(
     if not household:
         return ReliefScanResponse(
             success=False,
-            message=f"Invalid Kard Silong QR code: '{req.qr_code}'. No matching household record.",
+            message=f"Invalid Kard AlalAI QR code: '{req.qr_code}'. No matching household record.",
             already_claimed=False
         )
 
@@ -395,7 +549,7 @@ def scan_relief_card(
 
     return ReliefScanResponse(
         success=True,
-        message=f"Kard Silong Verified! Relief pack successfully issued to {household.representative_name} ({household.members_count} members).",
+        message=f"Kard AlalAI Verified! Relief pack successfully issued to {household.representative_name} ({household.members_count} members).",
         household=household,
         already_claimed=False
     )

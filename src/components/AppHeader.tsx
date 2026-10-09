@@ -74,8 +74,8 @@ export default function AppHeader({
           </View>
 
           <View>
-            <Text style={styles.brandName}>Silong</Text>
-            <Text style={styles.brandCaption}>TALA LOCAL AI HUB</Text>
+            <Text style={styles.brandName}>AlalAI</Text>
+            <Text style={styles.brandCaption}>TAGA-ALALAI LOCAL AI HUB</Text>
           </View>
         </Pressable>
 

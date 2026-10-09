@@ -8,6 +8,25 @@ import type {
   DashboardStatsData,
 } from '../types';
 
+export type IntakeResult = {
+  representative_name: string;
+  birthdate: string;
+  members_count: number;
+  location: string;
+  has_infant: boolean;
+  has_senior: boolean;
+  has_medical_needs: boolean;
+  medical_notes?: string | null;
+  confidence_scores?: Record<string, number>;
+  raw_transcript?: string | null;
+};
+
+export type IntakeUpload = {
+  uri: string;
+  name: string;
+  mimeType: string;
+};
+
 function resolveDefaultHubUrl(): string {
   // If running via Expo Go / Metro, hostUri is like "192.168.1.7:8081"
   const hostUri =
@@ -50,15 +69,53 @@ export function setHubUrl(url: string): void {
   currentHubUrl = clean;
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 6000): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 6000): Promise<Response | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
-    return res;
-  } finally {
     clearTimeout(timer);
+    return res;
+  } catch {
+    // AbortError (timeout) or network failure — return null so callers fall back silently
+    clearTimeout(timer);
+    return null;
   }
+}
+
+async function uploadIntakeFile(
+  path: string,
+  file: IntakeUpload,
+  timeoutMs: number
+): Promise<IntakeResult> {
+  const form = new FormData();
+  if (Platform.OS === 'web') {
+    const localFile = await fetch(file.uri);
+    if (!localFile.ok) {
+      throw new Error('Unable to read the selected file on this device.');
+    }
+    form.append('file', await localFile.blob(), file.name);
+  } else {
+    form.append('file', {
+      uri: file.uri,
+      name: file.name,
+      type: file.mimeType,
+    } as unknown as Blob);
+  }
+
+  const response = await fetchWithTimeout(`${currentHubUrl}${path}`, {
+    method: 'POST',
+    body: form,
+  }, timeoutMs);
+  if (!response) {
+    throw new Error('Cannot reach the AlalAI hub. Connect to the hub Wi-Fi and try again.');
+  }
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.detail || 'Taga-alalAI could not process this file.');
+  }
+  return result as IntakeResult;
 }
 
 // Local regex parser for pure user input parsing when offline
@@ -120,13 +177,13 @@ function parseLocalUserInput(text: string): {
     anim: 6, pito: 7, walo: 8, siyam: 9, sampu: 10
   };
 
-  const childrenMatch = clean.match(/(\d+)\s*(?:na\s+)?(?:anak|bata|miyembro|tao)/i);
+  const childrenMatch = clean.match(/(\d+)\s*(?:na\s+)?(?:anak|bata|miyembro|tao)\b/i);
   let childrenCount = 0;
   if (childrenMatch) {
     childrenCount = parseInt(childrenMatch[1], 10);
   } else {
     for (const [word, val] of Object.entries(numWords)) {
-      if (new RegExp(`\\b${word}\\s+(?:na\\s+)?(?:anak|bata|miyembro|tao|kasama)`, 'i').test(clean)) {
+      if (new RegExp(`\\b${word}\\s+(?:na\\s+)?(?:anak|bata|miyembro|tao|kasama)\\b`, 'i').test(clean)) {
         childrenCount = val;
         break;
       }
@@ -182,21 +239,17 @@ export const ApiService = {
   setHubUrl,
 
   async checkHealth(): Promise<{ online: boolean; ip?: string; households?: number; message?: string }> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/health`, {}, 3000);
-      if (res.ok) {
-        const data = await res.json();
-        return {
-          online: true,
-          ip: data.local_ip,
-          households: data.registered_households,
-          message: data.tala_ai,
-        };
-      }
-      return { online: false, message: 'Server unreachable' };
-    } catch {
-      return { online: false, message: 'Offline Mode' };
+    const res = await fetchWithTimeout(`${currentHubUrl}/health`, {}, 3000);
+    if (res && res.ok) {
+      const data = await res.json();
+      return {
+        online: true,
+        ip: data.local_ip,
+        households: data.registered_households,
+        message: data.taga_alalai ?? data.tala_ai,
+      };
     }
+    return { online: false, message: res ? 'Server unreachable' : 'Offline Mode' };
   },
 
   async intakeVoice(text: string): Promise<{
@@ -223,94 +276,54 @@ export const ApiService = {
       };
     }
 
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/intake/voice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: userText }),
-      });
-      if (res.ok) {
-        return await res.json();
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/intake/voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: userText }),
+    });
+    if (res) {
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.detail || 'Taga-alalAI could not structure the transcript.');
       }
-    } catch {
-      // Gracefully parse user input locally without crashing
+      return result;
     }
 
     // Pure local extraction on the user's actual text
     return parseLocalUserInput(userText);
   },
 
-  async intakePhoto(extractedText?: string): Promise<{
-    representative_name: string;
-    birthdate: string;
-    members_count: number;
-    location: string;
-    has_infant: boolean;
-    has_senior: boolean;
-    has_medical_needs: boolean;
-  }> {
-    const userText = (extractedText || '').trim();
+  async transcribeVoice(uri: string): Promise<IntakeResult> {
+    return uploadIntakeFile('/api/intake/voice/upload', {
+      uri,
+      name: 'household-intake.m4a',
+      mimeType: 'audio/mp4',
+    }, 180_000);
+  },
+
+  async intakePhotoFromImage(file: IntakeUpload): Promise<IntakeResult> {
+    return uploadIntakeFile('/api/intake/photo/upload', file, 60_000);
+  },
+
+  async intakePhoto(extractedText: string): Promise<IntakeResult> {
+    const userText = extractedText.trim();
     if (!userText) {
-      return {
-        representative_name: '',
-        birthdate: '',
-        members_count: 1,
-        location: '',
-        has_infant: false,
-        has_senior: false,
-        has_medical_needs: false,
-      };
+      throw new Error('No ID text was recognized. Retake the photo or enter the text manually.');
     }
 
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/intake/photo`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ extracted_text: userText }),
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Gracefully parse user input locally
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/intake/photo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extracted_text: userText }),
+    });
+    if (!res) {
+      throw new Error('Cannot reach the AlalAI hub to validate the ID text. Connect to the hub Wi-Fi and try again.');
     }
-
-    // Parse pure user input
-    let name = '';
-    const nameMatch = userText.match(/(?:NAME|PANGALAN|G\.|GNG\.)[:\s]+([A-Z\s]{4,30})/i);
-    if (nameMatch) {
-      name = nameMatch[1].trim();
-    } else {
-      for (const line of userText.split('\n')) {
-        const cleanLine = line.replace(/[^a-zA-Z\s]/g, '').trim();
-        if (cleanLine.length > 5 && !/(REPUBLIC|PHILIPPINES|IDENTIFICATION|CARD|SYSTEM)/i.test(cleanLine)) {
-          name = cleanLine;
-          break;
-        }
-      }
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(result.detail || 'Taga-alalAI could not validate the ID text.');
     }
-
-    let birthdate = '';
-    const bdayMatch = userText.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2}[-/]\d{4})/);
-    if (bdayMatch) {
-      birthdate = bdayMatch[0].replace(/\//g, '-');
-    }
-
-    let location = '';
-    const brgyMatch = userText.match(/(?:Brgy\.?|Barangay)\s+([A-Za-z0-9\s]+)/i);
-    if (brgyMatch) {
-      location = `Barangay ${brgyMatch[1].trim()}`;
-    }
-
-    return {
-      representative_name: name,
-      birthdate,
-      members_count: 1,
-      location,
-      has_infant: false,
-      has_senior: false,
-      has_medical_needs: false,
-    };
+    return result as IntakeResult;
   },
 
   async checkDuplicates(
@@ -322,21 +335,21 @@ export const ApiService = {
       return [];
     }
 
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/duplicates/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          representative_name: representative_name.trim(),
-          birthdate: birthdate ? birthdate.trim() : undefined,
-          location: location ? location.trim() : undefined,
-        }),
-      });
-      if (res.ok) {
-        return await res.json();
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/duplicates/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        representative_name: representative_name.trim(),
+        birthdate: birthdate ? birthdate.trim() : undefined,
+        location: location ? location.trim() : undefined,
+      }),
+    });
+    if (res) {
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.detail || 'The AlalAI hub could not check for duplicate records.');
       }
-    } catch {
-      // Fallback: check against actual offline households created in this session
+      return result;
     }
 
     const matches: DuplicateMatchItem[] = [];
@@ -365,22 +378,18 @@ export const ApiService = {
     has_senior: boolean,
     has_medical_needs: boolean
   ): Promise<SupplyNeedItem[]> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/needs/calculate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          members_count,
-          has_infant,
-          has_senior,
-          has_medical_needs,
-        }),
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Handled by local rule calculation
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/needs/calculate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        members_count,
+        has_infant,
+        has_senior,
+        has_medical_needs,
+      }),
+    });
+    if (res && res.ok) {
+      return await res.json();
     }
 
     // Bilang rules calculation purely based on user-supplied numbers
@@ -435,13 +444,9 @@ export const ApiService = {
   },
 
   async getDashboardStats(): Promise<DashboardStatsData> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/dashboard/stats`, {}, 3000);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Local fallback
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/dashboard/stats`, {}, 3000);
+    if (res && res.ok) {
+      return await res.json();
     }
 
     return {
@@ -464,26 +469,26 @@ export const ApiService = {
     has_medical_needs: boolean;
     medical_notes?: string;
   }): Promise<HouseholdData> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/households`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, created_offline: false }),
-      });
-      if (res.ok) {
-        const saved = await res.json();
-        offlineHouseholds.push(saved);
-        return saved;
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/households`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, created_offline: false }),
+    });
+    if (res) {
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.detail || 'The AlalAI hub could not save this registration.');
       }
-    } catch {
-      // Save locally
+      const saved = result;
+      offlineHouseholds.push(saved);
+      return saved;
     }
 
     const id = `FAM-LOCAL-${offlineHouseholds.length + 1}`;
     const cleanName = data.representative_name.replace(/\s+/g, '').toUpperCase() || 'FAMILY';
     const newHousehold: HouseholdData = {
       id,
-      qr_code: `SILONG-${cleanName}-${id}`,
+      qr_code: `ALALAI-${cleanName}-${id}`,
       representative_name: data.representative_name,
       birthdate: data.birthdate,
       members_count: data.members_count,
@@ -502,61 +507,46 @@ export const ApiService = {
   },
 
   async mergeHousehold(householdId: string, targetId: string): Promise<boolean> {
-    try {
-      const res = await fetchWithTimeout(
-        `${currentHubUrl}/api/households/${householdId}/merge?target_id=${targetId}`,
-        { method: 'POST' }
-      );
-      return res.ok;
-    } catch {
-      return true;
-    }
+    const res = await fetchWithTimeout(
+      `${currentHubUrl}/api/households/${householdId}/merge?target_id=${targetId}`,
+      { method: 'POST' }
+    );
+    return res?.ok ?? false;
   },
 
   async getSupplyAlerts(): Promise<SupplyAlertItem[]> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/alerts`, {}, 3000);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Fallback
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/alerts`, {}, 3000);
+    if (res && res.ok) {
+      return await res.json();
     }
-
     return [];
   },
 
   async requestResupply(itemId: string): Promise<{ success: boolean; message: string }> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/alerts/${itemId}/request`, {
-        method: 'POST',
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return { success: true, message: data.message };
-      }
-    } catch {
-      // Fallback
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/alerts/${itemId}/request`, {
+      method: 'POST',
+    });
+    if (res?.ok) {
+      const data = await res.json();
+      return { success: true, message: data.message };
     }
     return {
-      success: true,
-      message: 'Resupply request recorded locally for sync.',
+      success: false,
+      message: res
+        ? 'The AlalAI hub could not record this resupply request.'
+        : 'Cannot reach the AlalAI hub. Reconnect to the hub Wi-Fi and try again.',
     };
   },
 
   async getSmsReport(camp = 'Evacuation Center'): Promise<{ sms_body: string; char_count: number }> {
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/reports/sms?camp=${encodeURIComponent(camp)}`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Fallback
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/reports/sms?camp=${encodeURIComponent(camp)}`);
+    if (res && res.ok) {
+      return await res.json();
     }
 
     const totalF = offlineHouseholds.length;
     const totalP = offlineHouseholds.reduce((acc, h) => acc + h.members_count, 0);
-    const text = `SILONG:[${camp}] ${totalF}fam,${totalP}ind. Ready for relief ops. MDRRMO copy.`;
+    const text = `ALALAI:[${camp}] ${totalF}fam,${totalP}ind. Ready for relief ops. MDRRMO copy.`;
     return {
       sms_body: text.slice(0, 160),
       char_count: text.length,
@@ -573,26 +563,28 @@ export const ApiService = {
     if (!code) {
       return {
         success: false,
-        message: 'Please provide a Kard Silong QR code to scan.',
+        message: 'Please provide a Kard AlalAI QR code to scan.',
       };
     }
 
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/relief/scan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ qr_code: code, item_name: item }),
-      });
-      if (res.ok) {
-        return await res.json();
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/relief/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qr_code: code, item_name: item }),
+    });
+    if (res) {
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.detail || 'The AlalAI hub could not verify this Kard AlalAI code.');
       }
-    } catch {
-      // Local check
+      return result;
     }
 
-    // Check offline distributions for duplicate claims
+    const household = offlineHouseholds.find(
+      (record) => record.qr_code === code || record.id === code
+    );
     const existingClaim = offlineDistributions.find(
-      (d) => d.household_id === code && d.item_name === item
+      (d) => (d.household_id === code || d.household_id === household?.id) && d.item_name === item
     );
     if (existingClaim) {
       return {
@@ -602,15 +594,23 @@ export const ApiService = {
       };
     }
 
+    if (!household) {
+      return {
+        success: false,
+        message: 'The hub is offline and this Kard AlalAI is not in this device’s local records.',
+        already_claimed: false,
+      };
+    }
+
     offlineDistributions.push({
-      household_id: code,
+      household_id: household.id,
       item_name: item,
       timestamp: new Date().toLocaleTimeString(),
     });
 
     return {
       success: true,
-      message: `Kard Silong Verified! Relief pack successfully issued.`,
+      message: `Kard AlalAI Verified! Relief pack successfully issued.`,
       already_claimed: false,
     };
   },
@@ -628,27 +628,23 @@ export const ApiService = {
       };
     }
 
-    try {
-      const res = await fetchWithTimeout(`${currentHubUrl}/api/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_id: 'volunteer-phone-1',
-          households: offlineHouseholds,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const count = offlineHouseholds.length;
-        offlineHouseholds.length = 0;
-        return {
-          success: true,
-          synced_households: count,
-          message: data.message || `Successfully synced ${count} households to hub laptop.`,
-        };
-      }
-    } catch {
-      // Fallback
+    const res = await fetchWithTimeout(`${currentHubUrl}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_id: 'volunteer-phone-1',
+        households: offlineHouseholds,
+      }),
+    });
+    if (res && res.ok) {
+      const data = await res.json();
+      const count = offlineHouseholds.length;
+      offlineHouseholds.length = 0;
+      return {
+        success: true,
+        synced_households: count,
+        message: data.message || `Successfully synced ${count} households to hub laptop.`,
+      };
     }
 
     return {

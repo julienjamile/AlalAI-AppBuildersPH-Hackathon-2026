@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "silong-app",
-    "slug": "silong-app",
+    "name": "AlalAI",
+    "slug": "alalai-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "silongapp",
+    "scheme": "alalai",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
@@ -32,7 +32,23 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "AlalAI uses the microphone to record household intake interviews.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "AlalAI uses the camera to read an ID for household registration.",
+          "photosPermission": "AlalAI lets you choose an ID image for household registration.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

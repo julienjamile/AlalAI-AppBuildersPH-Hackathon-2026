@@ -47,5 +47,5 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.db
-backend/silong.db
+backend/alalai.db
 

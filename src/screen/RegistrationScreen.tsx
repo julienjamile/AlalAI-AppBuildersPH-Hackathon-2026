@@ -2,13 +2,23 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
+import * as ImagePicker from 'expo-image-picker';
 import QRCode from 'react-native-qrcode-svg';
 
 import ActionButton from '../components/ActionButton';
@@ -16,7 +26,7 @@ import Field from '../components/Field';
 import Panel from '../components/Panel';
 import ProgressSteps from '../components/ProgressSteps';
 import { COLORS } from '../constants/colors';
-import { ApiService } from '../services/api';
+import { ApiService, type IntakeResult } from '../services/api';
 import type {
   DuplicateMatchItem,
   HouseholdData,
@@ -79,13 +89,16 @@ export default function RegistrationScreen({
   onStartRegistration,
   onResetRegistration,
 }: Props) {
-  // Voice Modal State - pure user input
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [voiceResult, setVoiceResult] = useState<IntakeResult | null>(null);
 
-  // Photo Modal State - pure user input
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [photoText, setPhotoText] = useState('');
+  const [photoAsset, setPhotoAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [photoResult, setPhotoResult] = useState<IntakeResult | null>(null);
   const [processingAi, setProcessingAi] = useState(false);
 
   // Duplicates State
@@ -94,6 +107,100 @@ export default function RegistrationScreen({
 
   // Scan simulation state
   const [cardScanResult, setCardScanResult] = useState<string | null>(null);
+
+  function applyIntakeResult(parsed: IntakeResult) {
+    setFamilyName(parsed.representative_name);
+    setBirthdate(parsed.birthdate);
+    setMembers(String(parsed.members_count));
+    setLocation(parsed.location);
+    setHasInfant(parsed.has_infant);
+    setHasSenior(parsed.has_senior);
+    setHasMedicalNeeds(parsed.has_medical_needs);
+    setMedicalNotes(parsed.medical_notes || '');
+  }
+
+  async function handleStartRecording() {
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Microphone permission required', 'Allow AlalAI to use the microphone to record the household interview.');
+        return;
+      }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+    } catch (error) {
+      Alert.alert('Recording unavailable', error instanceof Error ? error.message : 'Could not start audio recording.');
+    }
+  }
+
+  async function handleStopRecording() {
+    setProcessingAi(true);
+    try {
+      await audioRecorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      const uri = audioRecorder.uri;
+      if (!uri) {
+        throw new Error('The recording is empty. Please record the household interview again.');
+      }
+      const parsed = await ApiService.transcribeVoice(uri);
+      const transcript = parsed.raw_transcript?.trim() || '';
+      if (!transcript) {
+        throw new Error('No speech was recognized. Try again in a quieter place or type the details.');
+      }
+      setVoiceTranscript(transcript);
+      setVoiceResult(parsed);
+    } catch (error) {
+      Alert.alert('Transcription failed', error instanceof Error ? error.message : 'Could not transcribe this recording.');
+    } finally {
+      setProcessingAi(false);
+    }
+  }
+
+  async function handleSelectIdImage(source: 'camera' | 'library') {
+    try {
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Camera permission required', 'Allow AlalAI to use the camera to photograph the ID.');
+          return;
+        }
+      }
+
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [16, 10],
+            quality: 0.8,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [16, 10],
+            quality: 0.8,
+          });
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      setPhotoAsset(asset);
+      setPhotoText('');
+      setPhotoResult(null);
+      setProcessingAi(true);
+
+      const parsed = await ApiService.intakePhotoFromImage({
+        uri: asset.uri,
+        name: asset.fileName || `alalai-id-${Date.now()}.jpg`,
+        mimeType: asset.mimeType || 'image/jpeg',
+      });
+      setPhotoText(parsed.raw_transcript || '');
+      setPhotoResult(parsed);
+    } catch (error) {
+      Alert.alert('ID reading failed', error instanceof Error ? error.message : 'Could not read this ID image.');
+    } finally {
+      setProcessingAi(false);
+    }
+  }
 
   async function handleProcessVoice() {
     const text = voiceTranscript.trim();
@@ -104,19 +211,14 @@ export default function RegistrationScreen({
 
     setProcessingAi(true);
     try {
-      const parsed = await ApiService.intakeVoice(text);
-      if (parsed.representative_name) setFamilyName(parsed.representative_name);
-      if (parsed.birthdate) setBirthdate(parsed.birthdate);
-      if (parsed.members_count) setMembers(String(parsed.members_count));
-      if (parsed.location) setLocation(parsed.location);
-      setHasInfant(parsed.has_infant);
-      setHasSenior(parsed.has_senior);
-      setHasMedicalNeeds(parsed.has_medical_needs);
-      setMedicalNotes(parsed.medical_notes || '');
+      const parsed = voiceResult?.raw_transcript?.trim() === text
+        ? voiceResult
+        : await ApiService.intakeVoice(text);
+      applyIntakeResult(parsed);
       setVoiceModalOpen(false);
       onStartRegistration('Kwento');
-    } catch {
-      Alert.alert('Processing Error', 'Unable to parse voice recording. Please enter details manually.');
+    } catch (error) {
+      Alert.alert('Processing error', error instanceof Error ? error.message : 'Unable to structure the transcript. Please enter details manually.');
     } finally {
       setProcessingAi(false);
     }
@@ -125,24 +227,20 @@ export default function RegistrationScreen({
   async function handleProcessPhoto() {
     const text = photoText.trim();
     if (!text) {
-      Alert.alert('Input Required', 'Please enter or paste the recognized document text.');
+      Alert.alert('ID text required', 'Take or choose an ID photo, or enter the text from the ID.');
       return;
     }
 
     setProcessingAi(true);
     try {
-      const parsed = await ApiService.intakePhoto(text);
-      if (parsed.representative_name) setFamilyName(parsed.representative_name);
-      if (parsed.birthdate) setBirthdate(parsed.birthdate);
-      if (parsed.members_count) setMembers(String(parsed.members_count));
-      if (parsed.location) setLocation(parsed.location);
-      setHasInfant(parsed.has_infant);
-      setHasSenior(parsed.has_senior);
-      setHasMedicalNeeds(parsed.has_medical_needs);
+      const parsed = photoResult?.raw_transcript?.trim() === text
+        ? photoResult
+        : await ApiService.intakePhoto(text);
+      applyIntakeResult(parsed);
       setPhotoModalOpen(false);
       onStartRegistration('Kuha');
-    } catch {
-      Alert.alert('Processing Error', 'Unable to parse document text. Please enter details manually.');
+    } catch (error) {
+      Alert.alert('ID validation failed', error instanceof Error ? error.message : 'Unable to validate the ID text.');
     } finally {
       setProcessingAi(false);
     }
@@ -162,8 +260,15 @@ export default function RegistrationScreen({
       } else {
         onNavigate('needs');
       }
-    } catch {
-      onNavigate('needs');
+    } catch (error) {
+      Alert.alert(
+        'Duplicate check unavailable',
+        `${error instanceof Error ? error.message : 'The AlalAI hub could not check the shared records.'} You can go back or continue with this limitation.`,
+        [
+          { text: 'Go back', style: 'cancel' },
+          { text: 'Continue without check', onPress: () => onNavigate('needs') },
+        ]
+      );
     } finally {
       setCheckingDuplicates(false);
     }
@@ -176,7 +281,7 @@ export default function RegistrationScreen({
         <ProgressSteps currentStep="intake" />
 
         <Text style={styles.intro}>
-          Choose how to record this household. Tala Local AI will transcribe,
+          Choose how to record this household. Taga-alalAI Local AI will transcribe,
           structure the data, and flag special needs.
         </Text>
 
@@ -189,9 +294,9 @@ export default function RegistrationScreen({
 
           <View style={styles.choiceContent}>
             <Text style={styles.choiceTitle}>Kwento</Text>
-            <Text style={styles.choiceSubtitle}>Voice Intake · Tala Brain</Text>
+            <Text style={styles.choiceSubtitle}>Voice Intake · Taga-alalAI Brain</Text>
             <Text style={styles.body}>
-              Speak or enter a conversation in Tagalog, Bisaya, or Taglish. Tala turns spoken
+              Speak or enter a conversation in Tagalog, Bisaya, or Taglish. Taga-alalAI turns spoken
               details into family records.
             </Text>
             <Text style={styles.activeTag}>VOICE / SPEECH INTAKE</Text>
@@ -209,7 +314,7 @@ export default function RegistrationScreen({
 
           <View style={styles.choiceContent}>
             <Text style={styles.choiceTitle}>Kuha</Text>
-            <Text style={styles.choiceSubtitle}>Photo Intake · Tala Eyes</Text>
+            <Text style={styles.choiceSubtitle}>Photo Intake · Taga-alalAI Eyes</Text>
             <Text style={styles.body}>
               Scan or enter details from a PhilSys ID, Barangay certificate, or disaster voucher.
             </Text>
@@ -238,49 +343,82 @@ export default function RegistrationScreen({
           visible={voiceModalOpen}
           transparent
           animationType="slide"
-          onRequestClose={() => setVoiceModalOpen(false)}
+          onRequestClose={() => {
+            if (recorderState.isRecording) {
+              void handleStopRecording();
+            } else {
+              setVoiceModalOpen(false);
+            }
+          }}
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Kwento Voice Intake</Text>
-              <Text style={styles.modalBody}>
-                Speak or type conversation details in Tagalog, Bisaya, or Taglish:
-              </Text>
-
-              <TextInput
-                style={styles.textArea}
-                multiline
-                numberOfLines={4}
-                value={voiceTranscript}
-                onChangeText={setVoiceTranscript}
-                placeholder="Halimbawa: Juan Dela Cruz, 42 anyos, tatlong anak, bunso 10 months, covered court Gym A..."
-              />
-
-              <View style={styles.modalActions}>
-                <Pressable
-                  style={[
-                    styles.btnAction,
-                    (!voiceTranscript.trim() || processingAi) && styles.btnDisabled,
-                  ]}
-                  disabled={!voiceTranscript.trim() || processingAi}
-                  onPress={handleProcessVoice}
-                >
-                  {processingAi ? (
-                    <ActivityIndicator color={COLORS.white} />
-                  ) : (
-                    <Text style={styles.btnActionText}>
-                      Process Details with Tala AI →
-                    </Text>
-                  )}
-                </Pressable>
+              <ScrollView
+                contentContainerStyle={styles.modalContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <Text style={styles.modalTitle}>Kwento Voice Intake</Text>
+                <Text style={styles.modalBody}>
+                  Record a household interview in Tagalog, Bisaya, or Taglish. Whisper runs locally on the connected AlalAI hub.
+                </Text>
 
                 <Pressable
-                  style={styles.btnCancel}
-                  onPress={() => setVoiceModalOpen(false)}
+                  accessibilityRole="button"
+                  style={[styles.btnAction, processingAi && styles.btnDisabled]}
+                  disabled={processingAi}
+                  onPress={recorderState.isRecording ? handleStopRecording : handleStartRecording}
                 >
-                  <Text style={styles.btnCancelText}>Cancel</Text>
+                  <Text style={styles.btnActionText}>
+                    {recorderState.isRecording ? 'Stop recording & transcribe' : '● Record household interview'}
+                  </Text>
                 </Pressable>
-              </View>
+
+                {processingAi && (
+                  <View style={styles.processingNotice}>
+                    <ActivityIndicator color={COLORS.primary} />
+                    <Text style={styles.body}>Transcribing with Whisper on the AlalAI hub…</Text>
+                  </View>
+                )}
+
+                <Text style={styles.modalBody}>Review or edit the transcript before Taga-alalAI structures it:</Text>
+                <TextInput
+                  style={styles.textArea}
+                  multiline
+                  numberOfLines={4}
+                  value={voiceTranscript}
+                  onChangeText={(text) => {
+                    setVoiceTranscript(text);
+                    if (text.trim() !== voiceResult?.raw_transcript?.trim()) setVoiceResult(null);
+                  }}
+                  placeholder="Halimbawa: Ako si Juan Dela Cruz, 42 anyos. Lima kami, may sanggol at si nanay na senior..."
+                />
+
+                <View style={styles.modalActions}>
+                  <Pressable
+                    style={[
+                      styles.btnAction,
+                      (!voiceTranscript.trim() || processingAi || recorderState.isRecording) && styles.btnDisabled,
+                    ]}
+                    disabled={!voiceTranscript.trim() || processingAi || recorderState.isRecording}
+                    onPress={handleProcessVoice}
+                  >
+                    {processingAi ? (
+                      <ActivityIndicator color={COLORS.white} />
+                    ) : (
+                      <Text style={styles.btnActionText}>Review extracted details →</Text>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.btnCancel, (recorderState.isRecording || processingAi) && styles.btnDisabled]}
+                    disabled={recorderState.isRecording || processingAi}
+                    onPress={() => setVoiceModalOpen(false)}
+                  >
+                    <Text style={styles.btnCancelText}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -294,45 +432,90 @@ export default function RegistrationScreen({
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Kuha Photo Intake</Text>
-              <Text style={styles.modalBody}>
-                Enter or paste text recognized from ID card or paper form:
-              </Text>
+              <ScrollView
+                contentContainerStyle={styles.modalContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <Text style={styles.modalTitle}>Kuha ID Intake</Text>
+                <Text style={styles.modalBody}>
+                  Take a photo or choose an ID image. Taga-alalAI reads it on the connected hub; no ID image is sent to a cloud AI service.
+                </Text>
 
-              <TextInput
-                style={styles.textArea}
-                multiline
-                numberOfLines={4}
-                value={photoText}
-                onChangeText={setPhotoText}
-                placeholder="Halimbawa: NAME: JUAN DELA CRUZ, DOB: 1982-05-14, BRGY SAN JOSE..."
-              />
+                <View style={styles.imagePickerActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    style={[styles.btnAction, styles.imagePickerButton, processingAi && styles.btnDisabled]}
+                    disabled={processingAi}
+                    onPress={() => handleSelectIdImage('camera')}
+                  >
+                    <Text style={styles.btnActionText}>Take ID photo</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    style={[styles.btnAction, styles.imagePickerButton, styles.btnSecondary]}
+                    disabled={processingAi}
+                    onPress={() => handleSelectIdImage('library')}
+                  >
+                    <Text style={styles.btnSecondaryText}>Choose from photos</Text>
+                  </Pressable>
+                </View>
 
-              <View style={styles.modalActions}>
-                <Pressable
-                  style={[
-                    styles.btnAction,
-                    (!photoText.trim() || processingAi) && styles.btnDisabled,
-                  ]}
-                  disabled={!photoText.trim() || processingAi}
-                  onPress={handleProcessPhoto}
-                >
-                  {processingAi ? (
-                    <ActivityIndicator color={COLORS.white} />
-                  ) : (
-                    <Text style={styles.btnActionText}>
-                      Extract Details with Tala Eyes →
-                    </Text>
-                  )}
-                </Pressable>
+                {photoAsset && (
+                  <Image
+                    source={{ uri: photoAsset.uri }}
+                    style={styles.idPreview}
+                    resizeMode="contain"
+                    accessibilityLabel="Selected ID image"
+                  />
+                )}
 
-                <Pressable
-                  style={styles.btnCancel}
-                  onPress={() => setPhotoModalOpen(false)}
-                >
-                  <Text style={styles.btnCancelText}>Cancel</Text>
-                </Pressable>
-              </View>
+                {processingAi && (
+                  <View style={styles.processingNotice}>
+                    <ActivityIndicator color={COLORS.primary} />
+                    <Text style={styles.body}>Reading ID text on the AlalAI hub…</Text>
+                  </View>
+                )}
+
+                <Text style={styles.modalBody}>
+                  Check the recognized text below. You can correct it before reviewing the registration.
+                </Text>
+                <TextInput
+                  style={styles.textArea}
+                  multiline
+                  numberOfLines={4}
+                  value={photoText}
+                  onChangeText={(text) => {
+                    setPhotoText(text);
+                    if (text.trim() !== photoResult?.raw_transcript?.trim()) setPhotoResult(null);
+                  }}
+                  placeholder="Recognized ID text appears here. You can also type it manually."
+                />
+
+                <View style={styles.modalActions}>
+                  <Pressable
+                    style={[
+                      styles.btnAction,
+                      (!photoText.trim() || processingAi) && styles.btnDisabled,
+                    ]}
+                    disabled={!photoText.trim() || processingAi}
+                    onPress={handleProcessPhoto}
+                  >
+                    {processingAi ? (
+                      <ActivityIndicator color={COLORS.white} />
+                    ) : (
+                      <Text style={styles.btnActionText}>Review extracted details →</Text>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    style={styles.btnCancel}
+                    onPress={() => setPhotoModalOpen(false)}
+                  >
+                    <Text style={styles.btnCancelText}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -345,7 +528,19 @@ export default function RegistrationScreen({
     const validMembers =
       members.trim() !== '' &&
       Number.isInteger(Number(members)) &&
-      Number(members) >= 1;
+      Number(members) >= 1 &&
+      Number(members) <= 100;
+    const normalizedBirthdate = birthdate.trim();
+    const parsedBirthdate = normalizedBirthdate
+      ? new Date(`${normalizedBirthdate}T00:00:00`)
+      : null;
+    const validBirthdate =
+      !normalizedBirthdate ||
+      (/^\d{4}-\d{2}-\d{2}$/.test(normalizedBirthdate) &&
+        parsedBirthdate !== null &&
+        !Number.isNaN(parsedBirthdate.getTime()) &&
+        parsedBirthdate.toISOString().slice(0, 10) === normalizedBirthdate &&
+        parsedBirthdate <= new Date());
 
     return (
       <View style={styles.screen}>
@@ -355,8 +550,13 @@ export default function RegistrationScreen({
           <Text style={styles.panelTitle}>{intakeType} intake · Review Details</Text>
           <Text style={styles.body}>
             Review and edit the family details entered below. Check spelling,
-            birthdate, and household size.
+            birthdate, household size, and center location. Leave birthdate blank if it is unknown.
           </Text>
+          {intakeType === 'Kuha' && (
+            <Text style={styles.body}>
+              An ID describes one person only. Confirm the family size, center, and special needs with the household before saving.
+            </Text>
+          )}
         </View>
 
         <Field
@@ -367,7 +567,7 @@ export default function RegistrationScreen({
         />
 
         <Field
-          label="Birthdate (YYYY-MM-DD)"
+          label="Birthdate (YYYY-MM-DD, optional)"
           value={birthdate}
           onChangeText={setBirthdate}
           placeholder="YYYY-MM-DD"
@@ -405,9 +605,9 @@ export default function RegistrationScreen({
           }
           disabled={
             !familyName.trim() ||
-            !birthdate.trim() ||
             !location.trim() ||
             !validMembers ||
+            !validBirthdate ||
             checkingDuplicates
           }
           onPress={handleConfirmAndCheckDuplicates}
@@ -516,10 +716,10 @@ export default function RegistrationScreen({
     );
   }
 
-  // --- SCREEN: CARD (KARD SILONG) ---
+  // --- SCREEN: CARD (KARD ALALAI) ---
   const currentQrCode =
     registeredCard?.qr_code ||
-    `SILONG-${(familyName || 'HOUSEHOLD').replace(/\s+/g, '').toUpperCase()}-001`;
+    `ALALAI-${(familyName || 'HOUSEHOLD').replace(/\s+/g, '').toUpperCase()}-001`;
 
   async function handleTestScanCard() {
     const res = await ApiService.scanReliefCard(currentQrCode);
@@ -531,15 +731,15 @@ export default function RegistrationScreen({
       <ProgressSteps currentStep="card" />
 
       <View style={styles.successBanner}>
-        <Text style={styles.successTitle}>Registration Complete · Kard Silong Issued</Text>
+        <Text style={styles.successTitle}>Registration Complete · Kard AlalAI Issued</Text>
         <Text style={styles.body}>
           The family has been officially recorded in the evacuation center database
-          and assigned a scannable Kard Silong QR identifier.
+          and assigned a scannable Kard AlalAI QR identifier.
         </Text>
       </View>
 
       <View style={styles.idCard}>
-        <Text style={styles.cardBrand}>SILONG</Text>
+        <Text style={styles.cardBrand}>ALALAI</Text>
         <Text style={styles.cardSubtitle}>OFFICIAL FAMILY RELIEF CARD</Text>
         <View style={styles.cardDivider} />
 
@@ -588,7 +788,7 @@ export default function RegistrationScreen({
       <Panel>
         <Text style={styles.panelTitle}>Test Relief Distribution Scan</Text>
         <Text style={styles.body}>
-          Simulate scanning this Kard Silong at the food distribution queue.
+          Simulate scanning this Kard AlalAI at the food distribution queue.
         </Text>
         <ActionButton
           title="Test scan at relief line"
@@ -861,7 +1061,46 @@ const styles = StyleSheet.create({
     padding: 22,
     width: '100%',
     maxWidth: 420,
+    maxHeight: '90%',
+    flexShrink: 1,
+  },
+  modalContent: {
     gap: 12,
+    paddingBottom: 2,
+  },
+  processingNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: COLORS.paleGreen,
+    padding: 12,
+    borderRadius: 10,
+  },
+  imagePickerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  imagePickerButton: {
+    flex: 1,
+  },
+  btnSecondary: {
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  btnSecondaryText: {
+    color: COLORS.primary,
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  idPreview: {
+    width: '100%',
+    height: 160,
+    backgroundColor: COLORS.paleGray,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   modalTitle: {
     fontSize: 20,

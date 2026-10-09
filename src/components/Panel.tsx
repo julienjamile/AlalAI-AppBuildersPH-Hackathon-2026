@@ -4,7 +4,7 @@ import { StyleSheet, View, type ViewProps } from 'react-native';
 import { COLORS } from '../constants/colors';
 
 type Props = ViewProps & {
-  children: ReactNode;
+  children?: ReactNode;
 };
 
 export default function Panel({ children, style, ...props }: Props) {

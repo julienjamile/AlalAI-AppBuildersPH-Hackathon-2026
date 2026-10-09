@@ -103,7 +103,7 @@ export default function ReportsScreen({ onBack }: Props) {
   return (
     <View style={styles.screen}>
       <Text style={styles.intro}>
-        Tala Abiso predictive supply warnings, 160-character Text Ulat SMS for
+        Taga-alalAI Abiso predictive supply warnings, 160-character Text Ulat SMS for
         MDRRMO, and Pasa local hotspot synchronization.
       </Text>
 
@@ -138,7 +138,7 @@ export default function ReportsScreen({ onBack }: Props) {
           </View>
 
           <View style={styles.draftBox}>
-            <Text style={styles.draftLabel}>TALA AI DRAFTED RESUPPLY REQUEST:</Text>
+            <Text style={styles.draftLabel}>TAGA-ALALAI AI DRAFTED RESUPPLY REQUEST:</Text>
             <Text style={styles.draftText}>{item.draft_request}</Text>
           </View>
 
@@ -171,7 +171,7 @@ export default function ReportsScreen({ onBack }: Props) {
         <Text style={styles.panelTitle}>Packed Disaster SMS Report</Text>
         <Text style={styles.body}>
           Standard 2G cellular SMS works when typhoon knocks out 4G/5G and fiber
-          internet. Tala compresses the full status into 1 message.
+          internet. Taga-alalAI compresses the full status into 1 message.
         </Text>
 
         <Text style={styles.smsPreview}>{smsData.sms_body}</Text>

@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+python-multipart
+rapidfuzz
+faster-whisper>=1.2.1,<2.0
+rapidocr-onnxruntime==1.4.4
+pillow
+numpy
+reportlab
+faker
+streamlit
+pandas

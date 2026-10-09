@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import {
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -71,8 +72,12 @@ export default function HomeScreen() {
           medical_notes: medicalNotes,
         });
         setRegisteredCard(saved);
-      } catch (e) {
-        console.warn('Error saving household:', e);
+      } catch (error) {
+        Alert.alert(
+          'Registration not saved',
+          error instanceof Error ? error.message : 'The AlalAI hub could not save this household. Check the details and try again.'
+        );
+        return;
       }
     }
     setScreen(next);
@@ -84,7 +89,7 @@ export default function HomeScreen() {
     confirm: 'Confirm Details',
     duplicate: 'Check Duplicates (Kilala)',
     needs: 'Family Needs (Bilang)',
-    card: 'Kard Silong QR',
+    card: 'Kard AlalAI QR',
     reports: 'Reports & Sync (Text Ulat)',
   };
 

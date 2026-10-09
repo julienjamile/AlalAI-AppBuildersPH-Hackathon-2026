@@ -28,7 +28,7 @@ def seed_database():
             print(f"Database already populated with {existing_count} households.")
             return
 
-        print("Seeding Silong database with synthetic evacuation records...")
+        print("Seeding AlalAI database with synthetic evacuation records...")
 
         now = datetime.now(timezone.utc)
 
@@ -102,7 +102,7 @@ def seed_database():
         # 2. Add the specific Duplicate Match from the spec: "Rosa D. Santos" at Evacuation Center B
         rosa_duplicate = Household(
             id="FAM-ROSA-001",
-            qr_code="SILONG-FAM-ROSA-001-A9F2",
+            qr_code="ALALAI-FAM-ROSA-001-A9F2",
             representative_name="Rosa D. Santos",
             birthdate="1985-04-12",
             members_count=5,
@@ -147,7 +147,7 @@ def seed_database():
 
             fam = Household(
                 id=f"FAM-{i:03d}",
-                qr_code=f"SILONG-FAM-{i:03d}-{random.randint(1000, 9999)}",
+                qr_code=f"ALALAI-FAM-{i:03d}-{random.randint(1000, 9999)}",
                 representative_name=rep_name,
                 birthdate=bdate,
                 members_count=m_count,

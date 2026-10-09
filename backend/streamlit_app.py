@@ -4,19 +4,19 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select, func
 from backend.database import engine, init_db
 from backend.models import Household, SupplyItem, DistributionRecord
-from backend.tala import tala_predict_alerts, tala_generate_sms_ulat
+from backend.taga-alalai import tala_predict_alerts, tala_generate_sms_ulat
 from backend.reports import generate_evacuation_pdf
 
 st.set_page_config(
-    page_title="Silong — Camp Manager Dashboard",
+    page_title="AlalAI — Camp Manager Dashboard",
     page_icon="🏠",
     layout="wide"
 )
 
 init_db()
 
-st.title("🏠 Silong — Camp Manager Hub Dashboard")
-st.caption("Disaster Evacuation Operations & Supply Intelligence · Tala Local AI Hub (Zero-Internet Mode)")
+st.title("🏠 AlalAI — Camp Manager Hub Dashboard")
+st.caption("Disaster Evacuation Operations & Supply Intelligence · Taga-alalAI Local AI Hub (Zero-Internet Mode)")
 
 with Session(engine) as session:
     total_families = session.exec(select(func.count(Household.id))).one()
@@ -39,7 +39,7 @@ with Session(engine) as session:
     tab_overview, tab_alerts, tab_families, tab_sms = st.tabs([
         "📊 Camp Overview & Inventory",
         "🚨 Abiso: Supply Alerts & Requests",
-        "👥 Registered Families & Kard Silong",
+        "👥 Registered Families & Kard AlalAI",
         "📩 Text Ulat (SMS to MDRRMO)"
     ])
 
@@ -66,7 +66,7 @@ with Session(engine) as session:
         st.download_button(
             label="📄 Download Official PDF Report (MDRRMO / MSWDO)",
             data=pdf_bytes,
-            file_name=f"Silong_Evacuation_Report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf",
+            file_name=f"AlalAI_Evacuation_Report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf",
             mime="application/pdf"
         )
 
@@ -76,7 +76,7 @@ with Session(engine) as session:
             for alert in alerts:
                 with st.expander(f"⚠️ {alert['name']} — {alert['status']} ({alert['quantity']})", expanded=True):
                     st.write(f"**Predicted Exhaustion:** In approximately **{alert['runout_hours']} hours**")
-                    st.info(f"**Tala AI Drafted Request:**\n\n{alert['draft_request']}")
+                    st.info(f"**Taga-alalAI AI Drafted Request:**\n\n{alert['draft_request']}")
                     if st.button(f"Approve & Send Resupply Request for {alert['name']}", key=f"btn_{alert['id']}"):
                         st.success(f"Request approved! Ready to pack into Text Ulat SMS for MDRRMO dispatch.")
         else:

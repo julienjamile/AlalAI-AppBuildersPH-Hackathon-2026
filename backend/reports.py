@@ -61,9 +61,9 @@ def generate_evacuation_pdf(camp_name: str, stats: dict, households: list, alert
     story = []
 
     # Header
-    story.append(Paragraph("SILONG — KALINGA KAHIT WALANG SIGNAL", title_style))
+    story.append(Paragraph("ALALAI — KALINGA KAHIT WALANG SIGNAL", title_style))
     story.append(Paragraph(f"Disaster Evacuation Status & Needs Report · {camp_name}", subtitle_style))
-    story.append(Paragraph(f"Generated on {datetime.now(timezone.utc).strftime('%B %d, %Y %H:%M UTC')} · Tala Local AI Hub", subtitle_style))
+    story.append(Paragraph(f"Generated on {datetime.now(timezone.utc).strftime('%B %d, %Y %H:%M UTC')} · Taga-alalAI Local AI Hub", subtitle_style))
     story.append(Spacer(1, 0.2 * inch))
 
     # Summary Stats Table
@@ -122,7 +122,7 @@ def generate_evacuation_pdf(camp_name: str, stats: dict, households: list, alert
     story.append(Spacer(1, 0.2 * inch))
 
     # Registered Households Sample List
-    story.append(Paragraph("Recent Registered Households (Kard Silong Log)", h2_style))
+    story.append(Paragraph("Recent Registered Households (Kard AlalAI Log)", h2_style))
     hh_rows = [["ID / QR", "Representative", "B-Date", "Size", "Vulnerabilities", "Status"]]
     for h in households[:15]:
         vulnerabilities = []
@@ -153,7 +153,7 @@ def generate_evacuation_pdf(camp_name: str, stats: dict, households: list, alert
     story.append(hh_table)
 
     story.append(Spacer(1, 0.25 * inch))
-    story.append(Paragraph("Confidential — For MDRRMO, MSWDO & Evacuation Command Center authorized personnel only. Processed offline via Tala local AI hub.", subtitle_style))
+    story.append(Paragraph("Confidential — For MDRRMO, MSWDO & Evacuation Command Center authorized personnel only. Processed offline via Taga-alalAI local AI hub.", subtitle_style))
 
     doc.build(story)
     buffer.seek(0)

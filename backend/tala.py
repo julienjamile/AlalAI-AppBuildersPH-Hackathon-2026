@@ -5,7 +5,7 @@ from datetime import datetime, date
 from typing import List, Optional, Tuple, Dict, Any
 from rapidfuzz import fuzz
 
-logger = logging.getLogger("tala")
+logger = logging.getLogger("taga-alalai")
 
 # Filipino/Taglish number word mapping
 NUMBER_WORDS = {
@@ -23,7 +23,7 @@ NUMBER_WORDS = {
 
 def tala_parse_voice(transcript: str) -> Dict[str, Any]:
     """
-    Tala Brain: Understands Tagalog/Bisaya/Taglish voice transcript
+    Taga-alalAI Brain: Understands Tagalog/Bisaya/Taglish voice transcript
     and extracts structured household information purely from user input.
     """
     clean_text = transcript.strip()
@@ -45,7 +45,7 @@ def tala_parse_voice(transcript: str) -> Dict[str, Any]:
     try:
         import ollama
         prompt = f"""
-        Ikaw si Tala, isang emergency evacuation intake assistant para sa Pilipinas.
+        Ikaw si Taga-alalAI, isang emergency evacuation intake assistant para sa Pilipinas.
         Suriin ang sumusunod na pag-uusap/transcript ng isang pamilya at ibalik lamang ang JSON:
         Transcript: "{clean_text}"
 
@@ -117,12 +117,20 @@ def tala_parse_voice(transcript: str) -> Dict[str, Any]:
     # Household members count derived purely from user's text
     children_count = 0
     for word, num in NUMBER_WORDS.items():
-        if re.search(rf"\b{word}\s+(?:na\s+)?(?:anak|bata|miyembro|tao|kasama)", clean_text, re.IGNORECASE):
+        if re.search(
+            rf"\b{word}\s+(?:na\s+)?(?:anak|bata|miyembro|tao|kasama)\b",
+            clean_text,
+            re.IGNORECASE,
+        ):
             children_count = num
             break
     
     if children_count == 0:
-        digits_children = re.search(r"(\d+)\s*(?:na\s+)?(?:anak|bata|miyembro|tao)", clean_text, re.IGNORECASE)
+        digits_children = re.search(
+            r"(\d+)\s*(?:na\s+)?(?:anak|bata|miyembro|tao)\b",
+            clean_text,
+            re.IGNORECASE,
+        )
         if digits_children:
             children_count = int(digits_children.group(1))
 
@@ -189,7 +197,7 @@ def tala_parse_voice(transcript: str) -> Dict[str, Any]:
 
 def tala_parse_photo_text(ocr_text: str) -> Dict[str, Any]:
     """
-    Tala Eyes: Parses text recognized from IDs or documents purely from user input.
+    Taga-alalAI Eyes: Parses text recognized from IDs or documents purely from user input.
     """
     clean_text = ocr_text.strip()
     if not clean_text:
@@ -207,40 +215,87 @@ def tala_parse_photo_text(ocr_text: str) -> Dict[str, Any]:
         }
 
     name = ""
-    name_match = re.search(r"(?:NAME|PANGALAN|G\.|GNG\.)[:\s]+([A-Z\s]{4,30})", clean_text, re.IGNORECASE)
-    if name_match:
-        name = name_match.group(1).strip().title()
-    else:
-        for line in clean_text.splitlines():
-            clean_line = re.sub(r"[^a-zA-Z\s]", "", line).strip()
-            if len(clean_line) > 5 and not any(kw in clean_line.upper() for kw in ["REPUBLIC", "PHILIPPINES", "IDENTIFICATION", "CARD", "SYSTEM"]):
+    lines = [re.sub(r"\s+", " ", line).strip(" :\t") for line in clean_text.splitlines()]
+    line_text = "\n".join(lines)
+
+    surname_match = re.search(r"^(?:SURNAME|LAST NAME|APELYIDO)\s*[:\-]\s*([^\n]+)", line_text, re.IGNORECASE | re.MULTILINE)
+    given_match = re.search(r"^(?:GIVEN NAME|FIRST NAME|PANGALAN)\s*[:\-]\s*([^\n]+)", line_text, re.IGNORECASE | re.MULTILINE)
+    middle_match = re.search(r"^MIDDLE NAME\s*[:\-]\s*([^\n]+)", line_text, re.IGNORECASE | re.MULTILINE)
+    if surname_match and given_match:
+        name_parts = [given_match.group(1), middle_match.group(1) if middle_match else "", surname_match.group(1)]
+        name = " ".join(part.strip(" ,.-") for part in name_parts if part.strip(" ,.-")).title()
+    if not name:
+        name_match = re.search(
+            r"^(?:NAME(?: OF (?:CARDHOLDER|HOLDER|PERSON|REPRESENTATIVE))?|PANGALAN|G\.|GNG\.)\s*[:\-]\s*([^\n]+)",
+            line_text,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if name_match:
+            name_value = re.split(
+                r"\s+(?:DOB|DATE OF BIRTH|BIRTHDATE|ADDRESS|SEX|GENDER)\s*[:\-]",
+                name_match.group(1),
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+            name = name_value.strip(" ,.-").title()
+    if not name:
+        excluded_lines = (
+            "REPUBLIC", "PHILIPPINE", "IDENTIFICATION", "PHILSYS", "CARD",
+            "NATIONAL ID", "DATE OF BIRTH", "ADDRESS", "NATIONALITY",
+            "CITIZEN", "PAMBANSANG PAGKAKAKILANLAN",
+        )
+        for line in lines:
+            clean_line = re.sub(r"[^a-zA-ZñÑ\s.'-]", "", line).strip(" .'-")
+            if len(clean_line) > 5 and not any(keyword in line.upper() for keyword in excluded_lines):
                 name = clean_line.title()
                 break
+    if name.casefold() in {"id", "id card", "national id", "no name", "unknown"}:
+        name = ""
 
+    labeled_date = re.search(
+        r"(?:DATE OF BIRTH|BIRTHDATE|DOB)\s*[:\-]?\s*((?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})",
+        clean_text,
+        re.IGNORECASE,
+    )
+    bday_match = labeled_date or re.search(
+        r"\b((?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})\b",
+        clean_text,
+    )
     birthdate = ""
-    bday_match = re.search(r"(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2}[-/]\d{4})", clean_text)
     if bday_match:
-        birthdate = bday_match.group(0).replace("/", "-")
-
-    location = "Evacuation Center"
-    brgy_match = re.search(r"(?:Brgy\.?|Barangay)\s+([A-Za-z0-9\s]+)", clean_text, re.IGNORECASE)
-    if brgy_match:
-        location = f"Barangay {brgy_match.group(1).strip()} Evacuation Site"
+        raw_date = bday_match.group(1)
+        year_first = re.fullmatch(r"((?:19|20)\d{2})[-/](\d{1,2})[-/](\d{1,2})", raw_date)
+        month_first = re.fullmatch(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", raw_date)
+        try:
+            if year_first:
+                birthdate = date(
+                    int(year_first.group(1)),
+                    int(year_first.group(2)),
+                    int(year_first.group(3)),
+                ).isoformat()
+            elif month_first:
+                birthdate = date(
+                    int(month_first.group(3)),
+                    int(month_first.group(1)),
+                    int(month_first.group(2)),
+                ).isoformat()
+        except ValueError:
+            birthdate = ""
 
     return {
         "representative_name": name,
         "birthdate": birthdate,
         "members_count": 1,
-        "location": location,
+        "location": "",
         "has_infant": False,
         "has_senior": False,
         "has_medical_needs": False,
-        "medical_notes": "Scanned document text",
+        "medical_notes": None,
         "confidence_scores": {
-            "representative_name": 0.90 if name else 0.50,
-            "birthdate": 0.90 if birthdate else 0.50,
-            "members_count": 0.60,
-            "location": 0.80
+            "representative_name": 0.85 if name else 0.0,
+            "birthdate": 0.85 if birthdate else 0.0,
+            "members_count": 0.50,
+            "location": 0.0
         },
         "raw_transcript": clean_text
     }
@@ -401,7 +456,7 @@ def tala_predict_alerts(inventory_items: List[Any], total_people: int) -> List[D
     """
     Abiso (Alerts & Predictor):
     Evaluates remaining stock against burn rate to predict exhaustion time.
-    Generates formal Tala resupply request draft.
+    Generates formal Taga-alalAI resupply request draft.
     """
     alerts = []
     people = max(1, total_people)
@@ -454,7 +509,7 @@ def tala_generate_sms_ulat(
     so it transmits reliably via 2G/GSM without mobile internet.
     """
     low_str = ",".join(low_stock_items[:3]) if low_stock_items else "None"
-    msg = f"SILONG:[{camp_name}] {families}fam,{people}ind. Low:{low_str}. {pending_reviews}rev. Resupply req sent. MDRRMO copy."
+    msg = f"ALALAI:[{camp_name}] {families}fam,{people}ind. Low:{low_str}. {pending_reviews}rev. Resupply req sent. MDRRMO copy."
     if len(msg) > 160:
-        msg = f"SILONG:[{camp_name[:8]}] {families}f,{people}p. Low:{low_str[:20]}. {pending_reviews}rev. Need supply. MDRRMO."
+        msg = f"ALALAI:[{camp_name[:8]}] {families}f,{people}p. Low:{low_str[:20]}. {pending_reviews}rev. Need supply. MDRRMO."
     return msg[:160]
