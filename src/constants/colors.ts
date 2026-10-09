@@ -14,6 +14,16 @@ export const COLORS = {
   inputBorder: '#CCD7CD',
   qrDark: '#183D30',
   paleOrange: '#FFF0DB',
+
+  // Dashboard colors
+  heroEyebrow: '#D7E2F0',
+  heroDescription: '#E2ECE4',
+  refreshOverlay: 'rgba(255,255,255,0.2)',
+  antiFraudBackground: '#FFE8D6',
+  errorBackground: '#FFEBEE',
+  successText: '#2E7D32',
+  errorText: '#C62828',
+  overlay: 'rgba(0,0,0,0.5)',
 } as const;
 
 export const REGISTRATION_STEPS = [

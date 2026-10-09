@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import AppHeader from '../components/AppHeader';
 import { COLORS } from '../constants/colors';
+import CenterSelectionScreen from '../screen/CenterSelectionScreen';
 import DashboardScreen from '../screen/DashboardScreen';
 import NeedsScreen from '../screen/NeedsScreen';
 import RegistrationScreen from '../screen/RegistrationScreen';
@@ -26,13 +27,21 @@ export default function HomeScreen() {
   const [birthdate, setBirthdate] = useState('');
   const [members, setMembers] = useState('1');
   const [location, setLocation] = useState('');
-
+  const [selectedCenter, setSelectedCenter] = useState<string | null>(null);
   const [hasInfant, setHasInfant] = useState(false);
   const [hasSenior, setHasSenior] = useState(false);
   const [hasMedicalNeeds, setHasMedicalNeeds] = useState(false);
   const [medicalNotes, setMedicalNotes] = useState('');
 
   const [registeredCard, setRegisteredCard] = useState<HouseholdData | null>(null);
+
+    if (!selectedCenter) {
+  return (
+    <CenterSelectionScreen
+      onContinue={setSelectedCenter}
+    />
+  );
+}
 
   function startRegistration(type: string) {
     setIntakeType(type);
@@ -119,7 +128,11 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         {screen === 'dashboard' && (
-          <DashboardScreen onNavigate={setScreen} />
+          <DashboardScreen
+            onNavigate={setScreen}
+            selectedCenter={selectedCenter}
+            onChangeCenter={() => setSelectedCenter(null)}
+          />
         )}
 
         {(screen === 'intake' ||
